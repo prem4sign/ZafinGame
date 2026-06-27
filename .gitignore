@@ -1,0 +1,7 @@
+node_modules/
+dist/
+exports/
+*.tsbuildinfo
+.DS_Store
+sample-assessment.json
+zafin-sample-assessment.json
