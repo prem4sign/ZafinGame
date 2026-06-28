@@ -14,6 +14,7 @@ import energyDrink from "../assets/collectibles/energy_drink.png";
 import trafficCone from "../assets/obstacles/traffic_cone.png";
 import barricade from "../assets/obstacles/barricade.png";
 import background from "../assets/environment/background.png";
+import completionShareImage from "../assets/ui/run_for_glory_completion.png";
 
 const BASE_GAME_WIDTH = 960;
 const GAME_WIDTH = 1280;
@@ -59,7 +60,9 @@ const FIRST_OBSTACLE_DISTANCE = 56;
 const FIRST_COLLECTIBLE_DISTANCE = 20;
 const COLLECTIBLE_OBSTACLE_BUFFER = 28;
 const LEADERBOARD_STORAGE_KEY = "run-for-glory-2026-leaderboard";
+const RUN_ATTEMPTS_STORAGE_KEY = "run-for-glory-2026-attempts";
 const MAX_LOCAL_LEADERBOARD_ENTRIES = 20;
+const MAX_LOCAL_RUN_ATTEMPTS = 100;
 const RUN_FRAME_KEYS = [
   "runner_smooth_run_1",
   "runner_smooth_run_2",
@@ -111,6 +114,14 @@ type LeaderboardEntry = {
   name: string;
   company: string;
   linkedInUrl: string;
+  distance: number;
+  createdAt: number;
+};
+
+type RunAttemptEntry = {
+  id: string;
+  name: string;
+  company: string;
   distance: number;
   createdAt: number;
 };
@@ -187,6 +198,8 @@ class RunForGloryScene extends Phaser.Scene {
   private startOverlay?: Phaser.GameObjects.Container;
   private gameOverOverlay?: Phaser.GameObjects.Container;
   private submitDistanceOverlay?: Phaser.GameObjects.Container;
+  private myScoresOverlay?: Phaser.GameObjects.Container;
+  private myScoresDom?: Phaser.GameObjects.DOMElement;
   private alreadySubmittedOverlay?: Phaser.GameObjects.Container;
   private nameInput?: Phaser.GameObjects.DOMElement;
   private companyInput?: Phaser.GameObjects.DOMElement;
@@ -197,6 +210,9 @@ class RunForGloryScene extends Phaser.Scene {
   private pendingCompanyName = "";
   private pendingAutoStart = false;
   private distanceSubmitted = false;
+  private runAttemptRecorded = false;
+  private selectedAttemptId = "";
+  private finalDistanceForSubmission?: number;
   private runFrameIndex = 0;
   private runFrameTimer = 0;
   private gameSpeed = S(300);
@@ -276,6 +292,8 @@ class RunForGloryScene extends Phaser.Scene {
     this.startOverlay = undefined;
     this.gameOverOverlay = undefined;
     this.submitDistanceOverlay = undefined;
+    this.myScoresOverlay = undefined;
+    this.myScoresDom = undefined;
     this.alreadySubmittedOverlay = undefined;
     this.controlsContainer = undefined;
     this.virtualControlButtons = [];
@@ -286,6 +304,9 @@ class RunForGloryScene extends Phaser.Scene {
     this.playerName = this.pendingPlayerName || "";
     this.companyName = this.pendingCompanyName || "";
     this.distanceSubmitted = false;
+    this.runAttemptRecorded = false;
+    this.selectedAttemptId = "";
+    this.finalDistanceForSubmission = undefined;
   }
 
   update(_time: number, delta: number) {
@@ -636,7 +657,7 @@ class RunForGloryScene extends Phaser.Scene {
       "💧 Collect Water Bottles and ⚡ Energy Drinks to restore your Energy.",
       "❤️ You have 3 Lives. The game ends if you hit obstacles 3 times or if your Energy is exhausted.",
       "🏆 Cover the maximum distance to secure your place on the leaderboard!",
-      "🏆 You may play multiple times to achieve your best distance. Once you submit your final distance, your entry is locked and no further attempts will be allowed."
+      "🏆 You may play multiple times to achieve your best distance. Once you submit your final score, your entry is locked and no further attempts will be allowed."
     ].join("\n");
 
     const shade = this.add
@@ -767,7 +788,7 @@ class RunForGloryScene extends Phaser.Scene {
       .rectangle(panelX, panelY, panelWidth, panelHeight, 0xffffff, 0.98)
       .setStrokeStyle(S(3), 0x0284c7);
     const title = this.add
-      .text(panelX, panelY - panelHeight / 2 + S(50), "✅ Final Distance Already Submitted", {
+      .text(panelX, panelY - panelHeight / 2 + S(50), "✅ Final Score Already Submitted", {
         color: "#05345e",
         fontFamily: "Arial, 'Segoe UI Emoji', sans-serif",
         fontSize: `${S(22)}px`,
@@ -779,7 +800,7 @@ class RunForGloryScene extends Phaser.Scene {
         panelX,
         panelY - panelHeight / 2 + S(98),
         [
-          "You have already submitted your final distance for this competition.",
+          "You have already submitted your final score for this competition.",
           "",
           "As per the rules, no further game attempts are allowed.",
           "",
@@ -1154,6 +1175,7 @@ class RunForGloryScene extends Phaser.Scene {
 
     this.isGameOver = true;
     this.physics.pause();
+    this.recordRunAttempt();
     this.setHudVisible(false);
     this.setRunnerFallenDisplay(S(150), S(86));
     if (reason === "lives" || reason === "fatigue") {
@@ -1213,15 +1235,6 @@ class RunForGloryScene extends Phaser.Scene {
     const buttonYBottom = panelY + S(138);
     const buttonXLeft = panelX - S(122);
     const buttonXRight = panelX + S(122);
-    const submitButton = this.createGameOverButton(
-      buttonXRight,
-      buttonYBottom,
-      S(220),
-      S(42),
-      "Submit Final Distance",
-      0x0f766e,
-      () => this.openSubmitDistanceOverlay()
-    );
     const runAgainButton = this.createGameOverButton(
       buttonXLeft,
       buttonYTop,
@@ -1236,12 +1249,12 @@ class RunForGloryScene extends Phaser.Scene {
       buttonYTop,
       S(220),
       S(42),
-      "View LeaderBoard",
+      "View my scores",
       0x1d4ed8,
-      () => this.createLeaderboardOverlay()
+      () => this.createMyScoresOverlay()
     );
     const changePlayerButton = this.createGameOverButton(
-      buttonXLeft,
+      panelX,
       buttonYBottom,
       S(190),
       S(42),
@@ -1262,9 +1275,7 @@ class RunForGloryScene extends Phaser.Scene {
         leaderboardButton.rect,
         leaderboardButton.text,
         changePlayerButton.rect,
-        changePlayerButton.text,
-        submitButton.rect,
-        submitButton.text
+        changePlayerButton.text
       ])
       .setDepth(2200);
   }
@@ -1298,9 +1309,14 @@ class RunForGloryScene extends Phaser.Scene {
     return { rect, text };
   }
 
-  private openSubmitDistanceOverlay() {
+  private openSubmitDistanceOverlay(finalDistance = Math.floor(this.distance)) {
+    this.finalDistanceForSubmission = finalDistance;
     this.gameOverOverlay?.destroy();
     this.gameOverOverlay = undefined;
+    this.myScoresDom?.destroy();
+    this.myScoresDom = undefined;
+    this.myScoresOverlay?.destroy();
+    this.myScoresOverlay = undefined;
     this.createSubmitDistanceOverlay();
   }
 
@@ -1314,7 +1330,7 @@ class RunForGloryScene extends Phaser.Scene {
       .rectangle(panelX, panelY, panelWidth, panelHeight, 0xffffff, 0.97)
       .setStrokeStyle(S(3), 0x0284c7);
     const title = this.add
-      .text(panelX, panelY - panelHeight / 2 + S(46), "Submit Final Distance", {
+      .text(panelX, panelY - panelHeight / 2 + S(46), "Submit Final Score", {
         color: "#0f172a",
         fontFamily: "Arial, sans-serif",
         fontSize: `${S(28)}px`,
@@ -1325,7 +1341,7 @@ class RunForGloryScene extends Phaser.Scene {
       .text(
         panelX,
         panelY - S(76),
-        `${this.resultPlayerLine()}  ·  ${Math.floor(this.distance).toLocaleString()}M`,
+        `${this.resultPlayerLine()}  ·  ${this.activeFinalDistance().toLocaleString()}M`,
         {
           color: "#075985",
           fontFamily: "Arial, sans-serif",
@@ -1352,7 +1368,7 @@ class RunForGloryScene extends Phaser.Scene {
       panelY + panelHeight / 2 - S(44),
       S(220),
       S(42),
-      "Submit Final Distance",
+      "Submit Final Score",
       0x0f766e,
       () => {
         this.handleFinalDistanceSubmit();
@@ -1401,7 +1417,7 @@ class RunForGloryScene extends Phaser.Scene {
   }
 
   private handleFinalDistanceSubmit() {
-    this.submitFinalDistance(this.readLinkedInInput());
+    this.submitFinalDistance(this.readLinkedInInput(), this.activeFinalDistance());
     this.createDistanceSubmittedOverlay();
   }
 
@@ -1412,7 +1428,7 @@ class RunForGloryScene extends Phaser.Scene {
     this.submitDistanceOverlay = undefined;
 
     const panelWidth = S(690);
-    const panelHeight = S(430);
+    const panelHeight = S(480);
     const panelX = GAME_WIDTH / 2;
     const panelY = GAME_HEIGHT / 2;
     const shade = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x03111f, 0.78).setOrigin(0);
@@ -1420,7 +1436,7 @@ class RunForGloryScene extends Phaser.Scene {
       .rectangle(panelX, panelY, panelWidth, panelHeight, 0xffffff, 0.98)
       .setStrokeStyle(S(3), 0x0284c7);
     const title = this.add
-      .text(panelX, panelY - panelHeight / 2 + S(52), "🏁 Distance Submitted Successfully!", {
+      .text(panelX, panelY - panelHeight / 2 + S(46), "🏁 Score Submitted Successfully!", {
         color: "#05345e",
         fontFamily: "Arial, 'Segoe UI Emoji', sans-serif",
         fontSize: `${S(26)}px`,
@@ -1428,30 +1444,43 @@ class RunForGloryScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const message = [
-      "Congratulations! Your final distance has been successfully submitted to the official leaderboard.",
+      "Congratulations! Your final score has been successfully submitted to the official leaderboard.",
       "",
       "Thank you for participating in the Zafin RISE 2026 Marathon Challenge.",
       "",
-      "Your distance has now been locked, and no further game attempts are permitted.",
+      "Your score has now been locked, and no further game attempts are permitted.",
       "",
-      "🏆 If your final distance ranks among the Top 5 after the competition closes, we'll reach out to you via your LinkedIn profile to notify you and provide prize claim details.",
+      "🏆 If your final score ranks among the Top 5 after the competition closes, we'll reach out to you via your LinkedIn profile to notify you and provide prize claim details.",
       "",
       "Thank you for taking part, and we wish you the very best of luck! 🎉"
     ].join("\n");
     const messageText = this.add
-      .text(panelX, panelY - panelHeight / 2 + S(100), message, {
+      .text(panelX, panelY - panelHeight / 2 + S(92), message, {
         color: "#0f344f",
         fontFamily: "Arial, 'Segoe UI Emoji', sans-serif",
-        fontSize: `${S(16)}px`,
+        fontSize: `${S(14)}px`,
         fontStyle: "bold",
-        lineSpacing: S(8),
+        lineSpacing: S(5),
         wordWrap: { width: panelWidth - S(76), useAdvancedWrap: true }
       })
       .setOrigin(0.5, 0);
+    const shareButton = this.createGameOverButton(
+      panelX,
+      panelY + panelHeight / 2 - S(42),
+      S(220),
+      S(42),
+      "Share on LinkedIn",
+      0x0a66c2,
+      () => this.openCompletionShareImage()
+    );
 
     this.submitDistanceOverlay = this.add
-      .container(0, 0, [shade, panel, title, messageText])
+      .container(0, 0, [shade, panel, title, messageText, shareButton.rect, shareButton.text])
       .setDepth(2400);
+  }
+
+  private openCompletionShareImage() {
+    window.open(completionShareImage, "_blank", "noopener,noreferrer");
   }
 
   private closeSubmitDistanceOverlay() {
@@ -1459,7 +1488,12 @@ class RunForGloryScene extends Phaser.Scene {
     this.linkedInInput = undefined;
     this.submitDistanceOverlay?.destroy();
     this.submitDistanceOverlay = undefined;
+    this.finalDistanceForSubmission = undefined;
     this.createGameOverOverlay();
+  }
+
+  private activeFinalDistance() {
+    return this.finalDistanceForSubmission ?? Math.floor(this.distance);
   }
 
   private resultPlayerLine() {
@@ -1487,9 +1521,290 @@ class RunForGloryScene extends Phaser.Scene {
     });
   }
 
-  private projectedRank() {
-    const distance = Math.floor(this.distance);
+  private createMyScoresOverlay() {
+    const attempts = this.loadRunAttemptsForCurrentPlayer();
+    const panelWidth = S(690);
+    const panelHeight = S(470);
+    const panelX = GAME_WIDTH / 2;
+    const panelY = GAME_HEIGHT / 2;
+    const listWidth = S(600);
+    const listHeight = S(245);
 
+    this.gameOverOverlay?.destroy();
+    this.gameOverOverlay = undefined;
+    this.myScoresDom?.destroy();
+    this.myScoresDom = undefined;
+    this.selectedAttemptId = attempts[0]?.id ?? "";
+
+    const shade = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x03111f, 0.76).setOrigin(0);
+    const panel = this.add
+      .rectangle(panelX, panelY, panelWidth, panelHeight, 0xffffff, 0.98)
+      .setStrokeStyle(S(3), 0x0284c7);
+    const title = this.add
+      .text(panelX, panelY - panelHeight / 2 + S(42), "MY SCORES", {
+        color: "#05345e",
+        fontFamily: "Arial, sans-serif",
+        fontSize: `${S(28)}px`,
+        fontStyle: "bold"
+      })
+      .setOrigin(0.5);
+    const playerText = this.add
+      .text(panelX, panelY - panelHeight / 2 + S(78), this.resultPlayerLine(), {
+        color: "#075985",
+        fontFamily: "Arial, sans-serif",
+        fontSize: `${S(14)}px`,
+        fontStyle: "bold"
+      })
+      .setOrigin(0.5);
+    const helperText = this.add
+      .text(panelX, panelY - panelHeight / 2 + S(108), "Select one run to submit as your final entry.", {
+        color: "#0f344f",
+        fontFamily: "Arial, sans-serif",
+        fontSize: `${S(13)}px`,
+        fontStyle: "bold"
+      })
+      .setOrigin(0.5);
+
+    this.myScoresDom = this.add
+      .dom(panelX, panelY + S(14), this.createMyScoresListElement(attempts, listWidth, listHeight))
+      .setDepth(2302);
+
+    const backButton = this.createGameOverButton(
+      panelX - S(125),
+      panelY + panelHeight / 2 - S(42),
+      S(170),
+      S(42),
+      "Back",
+      0xea580c,
+      () => this.closeMyScoresOverlay()
+    );
+    const submitButton = this.createGameOverButton(
+      panelX + S(125),
+      panelY + panelHeight / 2 - S(42),
+      S(240),
+      S(42),
+      "Submit as Final Score",
+      0x0f766e,
+      () => this.submitSelectedAttemptAsFinal()
+    );
+
+    this.myScoresOverlay = this.add
+      .container(0, 0, [
+        shade,
+        panel,
+        title,
+        playerText,
+        helperText,
+        backButton.rect,
+        backButton.text,
+        submitButton.rect,
+        submitButton.text
+      ])
+      .setDepth(2300);
+  }
+
+  private createMyScoresListElement(
+    attempts: RunAttemptEntry[],
+    width: number,
+    height: number
+  ) {
+    const root = document.createElement("div");
+    root.style.width = `${Math.round(width)}px`;
+    root.style.height = `${Math.round(height)}px`;
+    root.style.boxSizing = "border-box";
+    root.style.padding = `${Math.round(S(8))}px`;
+    root.style.border = `${Math.round(S(2))}px solid #0ea5e9`;
+    root.style.borderRadius = `${Math.round(S(10))}px`;
+    root.style.background = "rgba(224, 242, 254, 0.78)";
+    root.style.overflowY = "auto";
+    root.style.fontFamily = "Arial, sans-serif";
+    root.style.color = "#0f344f";
+    root.addEventListener("pointerdown", (event) => event.stopPropagation());
+    root.addEventListener("click", (event) => event.stopPropagation());
+    root.addEventListener("keydown", (event) => event.stopPropagation());
+
+    if (attempts.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "No runs recorded yet.";
+      empty.style.height = "100%";
+      empty.style.display = "flex";
+      empty.style.alignItems = "center";
+      empty.style.justifyContent = "center";
+      empty.style.fontSize = `${Math.round(S(18))}px`;
+      empty.style.fontWeight = "700";
+      root.appendChild(empty);
+      return root;
+    }
+
+    const header = document.createElement("div");
+    header.style.display = "grid";
+    header.style.gridTemplateColumns = "34px 1fr 110px 150px";
+    header.style.gap = `${Math.round(S(8))}px`;
+    header.style.alignItems = "center";
+    header.style.padding = `${Math.round(S(5))}px ${Math.round(S(8))}px`;
+    header.style.fontSize = `${Math.round(S(12))}px`;
+    header.style.fontWeight = "800";
+    header.style.color = "#075985";
+    header.innerHTML = "<span></span><span>Run</span><span>Distance</span><span>Date</span>";
+    root.appendChild(header);
+
+    const rows: Array<{ id: string; element: HTMLLabelElement }> = [];
+    const refreshRows = () => {
+      rows.forEach(({ id, element }) => {
+        element.style.background = id === this.selectedAttemptId
+          ? "rgba(14, 165, 233, 0.22)"
+          : "rgba(255, 255, 255, 0.72)";
+        element.style.borderColor = id === this.selectedAttemptId ? "#0284c7" : "#bae6fd";
+      });
+    };
+
+    attempts.forEach((attempt, index) => {
+      const row = document.createElement("label");
+      row.style.display = "grid";
+      row.style.gridTemplateColumns = "34px 1fr 110px 150px";
+      row.style.gap = `${Math.round(S(8))}px`;
+      row.style.alignItems = "center";
+      row.style.margin = `${Math.round(S(5))}px 0`;
+      row.style.padding = `${Math.round(S(7))}px ${Math.round(S(8))}px`;
+      row.style.border = `${Math.round(S(2))}px solid #bae6fd`;
+      row.style.borderRadius = `${Math.round(S(8))}px`;
+      row.style.cursor = "pointer";
+      row.style.fontSize = `${Math.round(S(13))}px`;
+      row.style.fontWeight = "700";
+
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "final-distance-attempt";
+      radio.value = attempt.id;
+      radio.checked = attempt.id === this.selectedAttemptId;
+      radio.style.width = `${Math.round(S(16))}px`;
+      radio.style.height = `${Math.round(S(16))}px`;
+      radio.addEventListener("change", () => {
+        this.selectedAttemptId = attempt.id;
+        refreshRows();
+      });
+
+      const run = document.createElement("span");
+      run.textContent = `Run ${attempts.length - index}`;
+      const distance = document.createElement("span");
+      distance.textContent = `${attempt.distance.toLocaleString()}M`;
+      distance.style.textAlign = "right";
+      const date = document.createElement("span");
+      date.textContent = this.formatAttemptDate(attempt.createdAt);
+      date.style.textAlign = "right";
+
+      row.append(radio, run, distance, date);
+      row.addEventListener("click", () => {
+        this.selectedAttemptId = attempt.id;
+        radio.checked = true;
+        refreshRows();
+      });
+      rows.push({ id: attempt.id, element: row });
+      root.appendChild(row);
+    });
+
+    refreshRows();
+    return root;
+  }
+
+  private closeMyScoresOverlay() {
+    this.myScoresDom?.destroy();
+    this.myScoresDom = undefined;
+    this.myScoresOverlay?.destroy();
+    this.myScoresOverlay = undefined;
+    this.selectedAttemptId = "";
+    this.createGameOverOverlay();
+  }
+
+  private submitSelectedAttemptAsFinal() {
+    const selectedAttempt = this.loadRunAttemptsForCurrentPlayer().find(
+      (attempt) => attempt.id === this.selectedAttemptId
+    );
+
+    if (!selectedAttempt) {
+      return;
+    }
+
+    this.openSubmitDistanceOverlay(selectedAttempt.distance);
+  }
+
+  private formatAttemptDate(createdAt: number) {
+    return new Date(createdAt).toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  }
+
+  private recordRunAttempt() {
+    if (this.runAttemptRecorded) {
+      return;
+    }
+
+    const entry: RunAttemptEntry = {
+      id: `${Date.now()}-${Phaser.Math.Between(1000, 9999)}`,
+      name: this.playerName || "Runner",
+      company: this.companyName,
+      distance: Math.floor(this.distance),
+      createdAt: Date.now()
+    };
+    const entries = [...this.loadRunAttempts(), entry]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, MAX_LOCAL_RUN_ATTEMPTS);
+
+    this.saveRunAttempts(entries);
+    this.runAttemptRecorded = true;
+  }
+
+  private loadRunAttemptsForCurrentPlayer() {
+    const playerKey = this.submissionIdentityKey(this.playerName || "Runner", this.companyName);
+
+    return this.loadRunAttempts()
+      .filter((attempt) => this.submissionIdentityKey(attempt.name, attempt.company) === playerKey)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  private loadRunAttempts(): RunAttemptEntry[] {
+    try {
+      const stored = window.localStorage.getItem(RUN_ATTEMPTS_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) : [];
+
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      return parsed
+        .filter((entry): entry is RunAttemptEntry =>
+          typeof entry?.id === "string" &&
+          typeof entry?.name === "string" &&
+          typeof entry?.company === "string" &&
+          typeof entry?.distance === "number" &&
+          typeof entry?.createdAt === "number"
+        )
+        .map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          company: entry.company,
+          distance: entry.distance,
+          createdAt: entry.createdAt
+        }))
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, MAX_LOCAL_RUN_ATTEMPTS);
+    } catch {
+      return [];
+    }
+  }
+
+  private saveRunAttempts(entries: RunAttemptEntry[]) {
+    try {
+      window.localStorage.setItem(RUN_ATTEMPTS_STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+      // Local storage can be unavailable in some browser privacy modes.
+    }
+  }
+
+  private projectedRank(distance = Math.floor(this.distance)) {
     return this.loadLeaderboard().filter((entry) => entry.distance > distance).length + 1;
   }
 
@@ -1508,8 +1823,8 @@ class RunForGloryScene extends Phaser.Scene {
     return `${normalizedName}::${normalizedCompany}`;
   }
 
-  private submitFinalDistance(linkedInUrl = "") {
-    const rank = this.projectedRank();
+  private submitFinalDistance(linkedInUrl = "", distance = Math.floor(this.distance)) {
+    const rank = this.projectedRank(distance);
 
     if (this.distanceSubmitted) {
       return rank;
@@ -1519,7 +1834,7 @@ class RunForGloryScene extends Phaser.Scene {
       name: this.playerName || "Runner",
       company: this.companyName,
       linkedInUrl,
-      distance: Math.floor(this.distance),
+      distance,
       createdAt: Date.now()
     };
     const entries = [...this.loadLeaderboard(), entry]
