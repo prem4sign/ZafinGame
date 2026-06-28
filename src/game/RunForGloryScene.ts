@@ -15,6 +15,7 @@ import trafficCone from "../assets/obstacles/traffic_cone.png";
 import barricade from "../assets/obstacles/barricade.png";
 import background from "../assets/environment/background.png";
 import completionShareImage from "../assets/ui/run_for_glory_completion.png";
+import topEventBadge from "../assets/ui/top_event_badge.png";
 
 const BASE_GAME_WIDTH = 960;
 const GAME_WIDTH = 1280;
@@ -37,21 +38,25 @@ const OBSTACLE_FATIGUE_PENALTY_SECONDS = 3;
 const FATIGUE_RECHARGE_BLINK_MS = 720;
 const FATIGUE_METER_WIDTH = S(220);
 const FATIGUE_METER_HEIGHT = S(22);
-const FATIGUE_METER_X = RUNNER_X;
-const FATIGUE_METER_Y = GROUND_Y + S(5);
 const FALLEN_RUNNER_GROUND_Y = GROUND_Y - S(2);
 const BACKGROUND_TILE_SCALE = S(0.629);
-const HUD_X = GAME_WIDTH - S(250);
 const TIMER_Y = S(16);
 const TIMER_WIDTH = S(250);
 const TIMER_HEIGHT = S(76);
+const HUD_RIGHT_MARGIN = S(18);
+const HUD_X = GAME_WIDTH - TIMER_WIDTH - HUD_RIGHT_MARGIN;
 const HUD_Y = TIMER_Y + TIMER_HEIGHT + S(12);
 const HUD_WIDTH = S(220);
 const HUD_HEIGHT = S(100);
+const EVENT_BADGE_CROP = { x: 16, y: 75, width: 577, height: 241 };
+const EVENT_BADGE_WIDTH = S(225);
+const EVENT_BADGE_HEIGHT = EVENT_BADGE_WIDTH * (EVENT_BADGE_CROP.height / EVENT_BADGE_CROP.width);
 const CONTROL_BUTTON_SIZE = S(58);
 const CONTROL_BUTTON_GAP = S(10);
 const CONTROL_CLUSTER_X = GAME_WIDTH - S(96);
 const CONTROL_CLUSTER_Y = GAME_HEIGHT - S(78);
+const FATIGUE_METER_X = CONTROL_CLUSTER_X - S(36);
+const FATIGUE_METER_Y = CONTROL_CLUSTER_Y + CONTROL_BUTTON_SIZE / 2 + S(18);
 const RUN_FRAME_BASE_INTERVAL_MS = 68;
 const RUN_FRAME_MIN_INTERVAL_MS = 50;
 const RUN_FRAME_MAX_INTERVAL_MS = 95;
@@ -63,6 +68,8 @@ const LEADERBOARD_STORAGE_KEY = "run-for-glory-2026-leaderboard";
 const RUN_ATTEMPTS_STORAGE_KEY = "run-for-glory-2026-attempts";
 const MAX_LOCAL_LEADERBOARD_ENTRIES = 20;
 const MAX_LOCAL_RUN_ATTEMPTS = 100;
+const ADMIN_NAME = "admin";
+const ADMIN_COMPANY = "admin020";
 const RUN_FRAME_KEYS = [
   "runner_smooth_run_1",
   "runner_smooth_run_2",
@@ -88,7 +95,8 @@ const assetMap = {
   energy_drink: energyDrink,
   traffic_cone: trafficCone,
   barricade,
-  background
+  background,
+  top_event_badge: topEventBadge
 };
 
 type ScrollItem = Phaser.Physics.Arcade.Image;
@@ -255,6 +263,7 @@ class RunForGloryScene extends Phaser.Scene {
     this.createFatigueMeter();
     this.createGroups();
     this.createHud();
+    this.createTopEventBadge();
     this.createInput();
     this.createOnScreenControls();
 
@@ -437,6 +446,20 @@ class RunForGloryScene extends Phaser.Scene {
     this.hudStaticLabels = [distanceLabel];
 
     this.updateHud();
+  }
+
+  private createTopEventBadge() {
+    this.add
+      .image(S(18), S(16), "top_event_badge")
+      .setOrigin(0)
+      .setCrop(
+        EVENT_BADGE_CROP.x,
+        EVENT_BADGE_CROP.y,
+        EVENT_BADGE_CROP.width,
+        EVENT_BADGE_CROP.height
+      )
+      .setDisplaySize(EVENT_BADGE_WIDTH, EVENT_BADGE_HEIGHT)
+      .setDepth(900);
   }
 
   private createInput() {
@@ -752,6 +775,11 @@ class RunForGloryScene extends Phaser.Scene {
     const enteredName = this.readStartInput(this.nameInput) || "Runner";
     const enteredCompany = this.readStartInput(this.companyInput);
 
+    if (this.isAdminLogin(enteredName, enteredCompany)) {
+      this.openAdminLeaderboard();
+      return;
+    }
+
     if (this.hasFinalSubmission(enteredName, enteredCompany)) {
       this.createAlreadySubmittedOverlay();
       return;
@@ -768,6 +796,28 @@ class RunForGloryScene extends Phaser.Scene {
     this.setOnScreenControlsVisible(true);
     this.physics.resume();
     this.updateHud();
+  }
+
+  private isAdminLogin(name: string, company: string) {
+    return (
+      name.trim().toLocaleLowerCase() === ADMIN_NAME &&
+      company.trim().toLocaleLowerCase() === ADMIN_COMPANY
+    );
+  }
+
+  private openAdminLeaderboard() {
+    this.nameInput?.destroy();
+    this.companyInput?.destroy();
+    this.nameInput = undefined;
+    this.companyInput = undefined;
+    this.startOverlay?.destroy();
+    this.startOverlay = undefined;
+    this.setOnScreenControlsVisible(false);
+    this.physics.pause();
+    this.createLeaderboardOverlay(() => {
+      this.createStartOverlay();
+      this.physics.pause();
+    });
   }
 
   private readStartInput(input?: Phaser.GameObjects.DOMElement) {
@@ -1878,6 +1928,23 @@ class RunForGloryScene extends Phaser.Scene {
     }
   }
 
+  private loadBestLeaderboardEntries() {
+    const bestByPlayer = new Map<string, LeaderboardEntry>();
+
+    this.loadLeaderboard().forEach((entry) => {
+      const key = this.submissionIdentityKey(entry.name, entry.company);
+      const currentBest = bestByPlayer.get(key);
+
+      if (!currentBest || entry.distance > currentBest.distance) {
+        bestByPlayer.set(key, entry);
+      }
+    });
+
+    return [...bestByPlayer.values()]
+      .sort((a, b) => b.distance - a.distance || a.createdAt - b.createdAt)
+      .slice(0, MAX_LOCAL_LEADERBOARD_ENTRIES);
+  }
+
   private saveLeaderboard(entries: LeaderboardEntry[]) {
     try {
       window.localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(entries));
@@ -1886,8 +1953,8 @@ class RunForGloryScene extends Phaser.Scene {
     }
   }
 
-  private createLeaderboardOverlay() {
-    const entries = this.loadLeaderboard().slice(0, 10);
+  private createLeaderboardOverlay(onBack?: () => void) {
+    const entries = this.loadBestLeaderboardEntries();
     const panelWidth = S(760);
     const panelHeight = S(460);
     const panelX = GAME_WIDTH / 2;
@@ -1910,10 +1977,10 @@ class RunForGloryScene extends Phaser.Scene {
     const companyX = panelX - S(55);
     const distanceX = panelX + S(295);
     const headerY = tableTop;
-    const rowHeight = S(30);
+    const rowHeight = entries.length > 10 ? S(24) : S(30);
     const tableItems: Phaser.GameObjects.GameObject[] = [];
     const headerStyle = this.leaderboardHeaderStyle();
-    const rowStyle = this.leaderboardRowStyle();
+    const rowStyle = this.leaderboardRowStyle(entries.length > 10 ? 12 : 14);
 
     tableItems.push(
       this.add.text(rankX, headerY, "Rank", headerStyle).setOrigin(0, 0.5),
@@ -1966,7 +2033,10 @@ class RunForGloryScene extends Phaser.Scene {
       S(42),
       "Back",
       0x0284c7,
-      () => leaderboardOverlay.destroy()
+      () => {
+        leaderboardOverlay.destroy();
+        onBack?.();
+      }
     );
     leaderboardOverlay = this.add
       .container(0, 0, [
@@ -1989,11 +2059,11 @@ class RunForGloryScene extends Phaser.Scene {
     };
   }
 
-  private leaderboardRowStyle(): Phaser.Types.GameObjects.Text.TextStyle {
+  private leaderboardRowStyle(size = 14): Phaser.Types.GameObjects.Text.TextStyle {
     return {
       color: "#0f344f",
       fontFamily: "Arial, sans-serif",
-      fontSize: `${S(14)}px`,
+      fontSize: `${S(size)}px`,
       fontStyle: "bold"
     };
   }

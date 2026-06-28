@@ -14,7 +14,7 @@ function calculateStageScale() {
     return 1;
   }
 
-  return Math.min(window.innerWidth / GAME_NATIVE_WIDTH, window.innerHeight / STAGE_NATIVE_HEIGHT);
+  return Math.min(window.innerWidth / GAME_NATIVE_WIDTH, window.innerHeight / GAME_NATIVE_HEIGHT);
 }
 
 export default function App() {

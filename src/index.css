@@ -40,7 +40,8 @@ body {
   height: 100svh;
   min-width: 320px;
   overflow: hidden;
-  place-items: center;
+  align-items: start;
+  justify-items: center;
 }
 
 .stage-viewport {
