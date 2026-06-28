@@ -47,6 +47,10 @@ const TIMER_HEIGHT = S(76);
 const HUD_Y = TIMER_Y + TIMER_HEIGHT + S(12);
 const HUD_WIDTH = S(220);
 const HUD_HEIGHT = S(100);
+const CONTROL_BUTTON_SIZE = S(58);
+const CONTROL_BUTTON_GAP = S(10);
+const CONTROL_CLUSTER_X = GAME_WIDTH - S(96);
+const CONTROL_CLUSTER_Y = GAME_HEIGHT - S(78);
 const RUN_FRAME_BASE_INTERVAL_MS = 68;
 const RUN_FRAME_MIN_INTERVAL_MS = 50;
 const RUN_FRAME_MAX_INTERVAL_MS = 95;
@@ -100,6 +104,8 @@ type CollectibleDefinition = {
   scale: number;
   heightAboveGround: number;
 };
+
+type VirtualControlDirection = "up" | "left" | "right";
 
 type LeaderboardEntry = {
   name: string;
@@ -176,6 +182,8 @@ class RunForGloryScene extends Phaser.Scene {
   private hudDistance!: Phaser.GameObjects.Text;
   private hudLives!: Phaser.GameObjects.Text;
   private hudStaticLabels: Phaser.GameObjects.Text[] = [];
+  private controlsContainer?: Phaser.GameObjects.Container;
+  private virtualControlButtons: Phaser.GameObjects.Container[] = [];
   private startOverlay?: Phaser.GameObjects.Container;
   private gameOverOverlay?: Phaser.GameObjects.Container;
   private submitDistanceOverlay?: Phaser.GameObjects.Container;
@@ -205,6 +213,8 @@ class RunForGloryScene extends Phaser.Scene {
   private lastObstacleDistance = -Infinity;
   private lastCollectibleDistance = -Infinity;
   private invulnerableUntil = 0;
+  private virtualLeftDown = false;
+  private virtualRightDown = false;
 
   constructor() {
     super("RunForGloryScene");
@@ -230,9 +240,11 @@ class RunForGloryScene extends Phaser.Scene {
     this.createGroups();
     this.createHud();
     this.createInput();
+    this.createOnScreenControls();
 
     if (this.pendingAutoStart) {
       this.started = true;
+      this.setOnScreenControlsVisible(true);
       this.physics.resume();
       this.updateHud();
       return;
@@ -259,10 +271,14 @@ class RunForGloryScene extends Phaser.Scene {
     this.lastObstacleDistance = -Infinity;
     this.lastCollectibleDistance = -Infinity;
     this.invulnerableUntil = 0;
+    this.virtualLeftDown = false;
+    this.virtualRightDown = false;
     this.startOverlay = undefined;
     this.gameOverOverlay = undefined;
     this.submitDistanceOverlay = undefined;
     this.alreadySubmittedOverlay = undefined;
+    this.controlsContainer = undefined;
+    this.virtualControlButtons = [];
     this.nameInput = undefined;
     this.companyInput = undefined;
     this.linkedInInput = undefined;
@@ -416,7 +432,11 @@ class RunForGloryScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.ENTER
     ]);
 
-    this.input.on("pointerdown", () => {
+    this.input.on("pointerdown", (_pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+      if (this.pointerIsOverVirtualControl(currentlyOver)) {
+        return;
+      }
+
       if (this.isGameOver) {
         return;
       }
@@ -427,6 +447,178 @@ class RunForGloryScene extends Phaser.Scene {
 
       this.jump();
     });
+    this.input.on("pointerup", () => this.releaseVirtualPaceControls());
+  }
+
+  private createOnScreenControls() {
+    const rowOffset = CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP;
+    const upButton = this.createVirtualControlButton(
+      "up",
+      CONTROL_CLUSTER_X,
+      CONTROL_CLUSTER_Y - rowOffset
+    );
+    const leftButton = this.createVirtualControlButton(
+      "left",
+      CONTROL_CLUSTER_X - rowOffset / 2,
+      CONTROL_CLUSTER_Y
+    );
+    const rightButton = this.createVirtualControlButton(
+      "right",
+      CONTROL_CLUSTER_X + rowOffset / 2,
+      CONTROL_CLUSTER_Y
+    );
+
+    this.virtualControlButtons = [upButton, leftButton, rightButton];
+    this.controlsContainer = this.add
+      .container(0, 0, this.virtualControlButtons)
+      .setDepth(1100)
+      .setVisible(false);
+  }
+
+  private createVirtualControlButton(direction: VirtualControlDirection, x: number, y: number) {
+    const size = CONTROL_BUTTON_SIZE;
+    const radius = S(18);
+    const shadow = this.add.graphics();
+    const body = this.add.graphics();
+    const arrow = this.add.graphics();
+    const button = this.add.container(x, y, [shadow, body, arrow]);
+
+    shadow.fillStyle(0x03111f, 0.32);
+    shadow.fillRoundedRect(-size / 2 + S(3), -size / 2 + S(6), size, size, radius);
+
+    body.fillStyle(0x16c85a, 0.98);
+    body.fillRoundedRect(-size / 2, -size / 2, size, size, radius);
+    body.fillStyle(0x4ade80, 0.84);
+    body.fillRoundedRect(-size * 0.42, -size * 0.42, size * 0.84, size * 0.46, radius);
+    body.fillStyle(0xb8ffb8, 0.34);
+    body.fillEllipse(size * 0.14, size * 0.1, size * 0.62, size * 0.5);
+    body.fillStyle(0xffffff, 0.72);
+    body.fillEllipse(-size * 0.22, -size * 0.26, size * 0.25, size * 0.1);
+    body.lineStyle(S(3), 0x0f9f45, 0.96);
+    body.strokeRoundedRect(-size / 2, -size / 2, size, size, radius);
+    body.lineStyle(S(2), 0x86efac, 0.78);
+    body.strokeRoundedRect(-size / 2 + S(4), -size / 2 + S(4), size - S(8), size - S(8), radius);
+
+    this.drawVirtualControlArrow(arrow, direction, size);
+
+    button.setSize(size, size);
+    button.setInteractive(
+      new Phaser.Geom.Rectangle(-size / 2, -size / 2, size, size),
+      Phaser.Geom.Rectangle.Contains
+    );
+    if (button.input) {
+      button.input.cursor = "pointer";
+    }
+
+    button.on("pointerdown", (...args: unknown[]) => {
+      this.stopVirtualControlPropagation(args);
+      this.handleVirtualControlDown(direction, button);
+    });
+    button.on("pointerup", (...args: unknown[]) => {
+      this.stopVirtualControlPropagation(args);
+      this.handleVirtualControlUp(direction, button);
+    });
+    button.on("pointerout", (...args: unknown[]) => {
+      this.stopVirtualControlPropagation(args);
+      this.handleVirtualControlUp(direction, button);
+    });
+    button.on("pointerupoutside", (...args: unknown[]) => {
+      this.stopVirtualControlPropagation(args);
+      this.handleVirtualControlUp(direction, button);
+    });
+
+    return button;
+  }
+
+  private drawVirtualControlArrow(
+    arrow: Phaser.GameObjects.Graphics,
+    direction: VirtualControlDirection,
+    size: number
+  ) {
+    const drawChevron = (color: number, alpha: number, thickness: number) => {
+      arrow.lineStyle(thickness, color, alpha);
+      arrow.beginPath();
+
+      if (direction === "right") {
+        arrow.moveTo(-size * 0.15, -size * 0.22);
+        arrow.lineTo(size * 0.15, 0);
+        arrow.lineTo(-size * 0.15, size * 0.22);
+      } else if (direction === "left") {
+        arrow.moveTo(size * 0.15, -size * 0.22);
+        arrow.lineTo(-size * 0.15, 0);
+        arrow.lineTo(size * 0.15, size * 0.22);
+      } else {
+        arrow.moveTo(-size * 0.22, size * 0.14);
+        arrow.lineTo(0, -size * 0.16);
+        arrow.lineTo(size * 0.22, size * 0.14);
+      }
+
+      arrow.strokePath();
+    };
+
+    drawChevron(0x07572e, 0.34, S(11));
+    drawChevron(0x087f40, 0.96, S(7));
+  }
+
+  private handleVirtualControlDown(
+    direction: VirtualControlDirection,
+    button: Phaser.GameObjects.Container
+  ) {
+    if (!this.started || this.isGameOver) {
+      return;
+    }
+
+    button.setScale(0.94);
+
+    if (direction === "up") {
+      this.jump();
+      return;
+    }
+
+    if (direction === "left") {
+      this.virtualLeftDown = true;
+      return;
+    }
+
+    this.virtualRightDown = true;
+  }
+
+  private handleVirtualControlUp(
+    direction: VirtualControlDirection,
+    button: Phaser.GameObjects.Container
+  ) {
+    button.setScale(1);
+
+    if (direction === "left") {
+      this.virtualLeftDown = false;
+    } else if (direction === "right") {
+      this.virtualRightDown = false;
+    }
+  }
+
+  private stopVirtualControlPropagation(args: unknown[]) {
+    const maybeEvent = args[args.length - 1] as { stopPropagation?: () => void } | undefined;
+    maybeEvent?.stopPropagation?.();
+  }
+
+  private pointerIsOverVirtualControl(currentlyOver: Phaser.GameObjects.GameObject[] = []) {
+    return currentlyOver.some((item) =>
+      this.virtualControlButtons.includes(item as Phaser.GameObjects.Container)
+    );
+  }
+
+  private releaseVirtualPaceControls() {
+    this.virtualLeftDown = false;
+    this.virtualRightDown = false;
+    this.virtualControlButtons.forEach((button) => button.setScale(1));
+  }
+
+  private setOnScreenControlsVisible(visible: boolean) {
+    this.controlsContainer?.setVisible(visible);
+
+    if (!visible) {
+      this.releaseVirtualPaceControls();
+    }
   }
 
   private createStartOverlay() {
@@ -552,6 +744,7 @@ class RunForGloryScene extends Phaser.Scene {
     this.companyInput = undefined;
     this.started = true;
     this.startOverlay?.destroy();
+    this.setOnScreenControlsVisible(true);
     this.physics.resume();
     this.updateHud();
   }
@@ -688,11 +881,11 @@ class RunForGloryScene extends Phaser.Scene {
       return 1;
     }
 
-    if (this.rightKey?.isDown) {
+    if (this.rightKey?.isDown || this.virtualRightDown) {
       return SPEED_BOOST_MULTIPLIER;
     }
 
-    if (this.leftKey?.isDown) {
+    if (this.leftKey?.isDown || this.virtualLeftDown) {
       return SLOW_PACE_MULTIPLIER;
     }
 
@@ -1633,6 +1826,8 @@ class RunForGloryScene extends Phaser.Scene {
   }
 
   private setHudVisible(visible: boolean) {
+    this.setOnScreenControlsVisible(visible && this.started && !this.isGameOver);
+
     [
       this.timerCover,
       this.timerText,
