@@ -9,6 +9,11 @@ import runnerSmoothRun6 from "../assets/characters/smooth/runner_smooth_run_6.pn
 import runnerSmoothRun7 from "../assets/characters/smooth/runner_smooth_run_7.png";
 import runnerSmoothRun8 from "../assets/characters/smooth/runner_smooth_run_8.png";
 import runnerSlide from "../assets/characters/runner_slide.png";
+import gameOverSound from "../assets/audio/game_over.mp3";
+import hurdleHitSound from "../assets/audio/hurdle_hit.mp3";
+import openingMusic from "../assets/audio/opening_music.mp3";
+import rechargeSound from "../assets/audio/recharge.mp3";
+import runningBgMusic from "../assets/audio/running_bg_music.mp3";
 import waterBottle from "../assets/collectibles/water_bottle.png";
 import energyDrink from "../assets/collectibles/energy_drink.png";
 import trafficCone from "../assets/obstacles/traffic_cone.png";
@@ -77,6 +82,10 @@ const LAUNCH_SCREEN_SCALE = Math.max(
   GAME_WIDTH / LAUNCH_SCREEN_SOURCE_WIDTH,
   GAME_HEIGHT / LAUNCH_SCREEN_SOURCE_HEIGHT
 );
+const OPENING_MUSIC_VOLUME = 0.42;
+const RUNNING_MUSIC_VOLUME = 0.18;
+const SFX_VOLUME = 0.78;
+const GAME_OVER_VOLUME = 0.86;
 const RUN_FRAME_KEYS = [
   "runner_smooth_run_1",
   "runner_smooth_run_2",
@@ -105,6 +114,14 @@ const assetMap = {
   background,
   launch_screen: launchScreen,
   top_event_badge: topEventBadge
+};
+
+const audioMap = {
+  opening_music: openingMusic,
+  running_bg_music: runningBgMusic,
+  recharge_sfx: rechargeSound,
+  hurdle_hit_sfx: hurdleHitSound,
+  game_over_sfx: gameOverSound
 };
 
 type ScrollItem = Phaser.Physics.Arcade.Image;
@@ -204,6 +221,8 @@ class RunForGloryScene extends Phaser.Scene {
   private timerCover!: Phaser.GameObjects.Graphics;
   private timerText!: Phaser.GameObjects.Text;
   private timerRunnerText!: Phaser.GameObjects.Text;
+  private openingMusic?: Phaser.Sound.BaseSound;
+  private runningMusic?: Phaser.Sound.BaseSound;
   private fatigueMeter!: Phaser.GameObjects.Graphics;
   private hudCover!: Phaser.GameObjects.Graphics;
   private hudDistance!: Phaser.GameObjects.Text;
@@ -265,6 +284,9 @@ class RunForGloryScene extends Phaser.Scene {
     Object.entries(assetMap).forEach(([key, url]) => {
       this.load.image(key, url);
     });
+    Object.entries(audioMap).forEach(([key, url]) => {
+      this.load.audio(key, url);
+    });
   }
 
   create() {
@@ -281,6 +303,7 @@ class RunForGloryScene extends Phaser.Scene {
     if (this.pendingAutoStart) {
       this.started = true;
       this.setOnScreenControlsVisible(true);
+      this.startRunningMusic();
       this.physics.resume();
       this.updateHud();
       return;
@@ -682,6 +705,8 @@ class RunForGloryScene extends Phaser.Scene {
   }
 
   private createStartOverlay() {
+    this.startOpeningMusic();
+
     const panelWidth = S(720);
     const panelHeight = S(510);
     const panelY = GAME_HEIGHT / 2;
@@ -803,6 +828,7 @@ class RunForGloryScene extends Phaser.Scene {
 
     this.playerName = enteredName;
     this.companyName = enteredCompany;
+    this.startRunningMusic();
     this.nameInput?.destroy();
     this.companyInput?.destroy();
     this.nameInput = undefined;
@@ -822,6 +848,7 @@ class RunForGloryScene extends Phaser.Scene {
   }
 
   private openAdminLeaderboard() {
+    this.stopAllMusic();
     this.nameInput?.destroy();
     this.companyInput?.destroy();
     this.nameInput = undefined;
@@ -924,7 +951,55 @@ class RunForGloryScene extends Phaser.Scene {
     });
   }
 
+  private startOpeningMusic(forceRestart = false) {
+    this.stopRunningMusic();
+    this.openingMusic ??= this.sound.add("opening_music", {
+      loop: true,
+      volume: OPENING_MUSIC_VOLUME
+    });
+
+    if (forceRestart) {
+      this.openingMusic.stop();
+    }
+
+    if (!this.openingMusic.isPlaying) {
+      this.openingMusic.play();
+    }
+  }
+
+  private stopOpeningMusic() {
+    this.openingMusic?.stop();
+  }
+
+  private startRunningMusic() {
+    this.stopOpeningMusic();
+    this.runningMusic ??= this.sound.add("running_bg_music", {
+      loop: true,
+      volume: RUNNING_MUSIC_VOLUME
+    });
+
+    if (!this.runningMusic.isPlaying) {
+      this.runningMusic.play();
+    }
+  }
+
+  private stopRunningMusic() {
+    this.runningMusic?.stop();
+  }
+
+  private stopAllMusic() {
+    this.stopOpeningMusic();
+    this.stopRunningMusic();
+  }
+
+  private playSfx(key: keyof typeof audioMap, volume = SFX_VOLUME) {
+    this.sound.play(key, { volume });
+  }
+
   private createLaunchOverlay() {
+    this.startOpeningMusic();
+    this.input.once("pointerdown", () => this.startOpeningMusic(true));
+
     const launchImage = this.add
       .image(GAME_WIDTH / 2, GAME_HEIGHT / 2, "launch_screen")
       .setDisplaySize(
@@ -1210,6 +1285,7 @@ class RunForGloryScene extends Phaser.Scene {
     obstacle.destroy();
     this.obstaclesHit += 1;
     this.lives -= 1;
+    this.playSfx("hurdle_hit_sfx");
     this.fatigueSecondsRemaining = Math.max(
       0,
       this.fatigueSecondsRemaining - OBSTACLE_FATIGUE_PENALTY_SECONDS
@@ -1240,8 +1316,10 @@ class RunForGloryScene extends Phaser.Scene {
   private handleCollectible(collectible: ScrollItem) {
     if (collectible.texture.key === "water_bottle") {
       this.rechargeFatigue(WATER_BOTTLE_FATIGUE_RECHARGE_SECONDS);
+      this.playSfx("recharge_sfx");
     } else if (collectible.texture.key === "energy_drink") {
       this.rechargeFatigue(ENERGY_DRINK_FATIGUE_RECHARGE_SECONDS);
+      this.playSfx("recharge_sfx");
     }
 
     this.tweens.add({
@@ -1275,6 +1353,8 @@ class RunForGloryScene extends Phaser.Scene {
 
     this.isGameOver = true;
     this.physics.pause();
+    this.stopAllMusic();
+    this.playSfx("game_over_sfx", GAME_OVER_VOLUME);
     this.recordRunAttempt();
     this.setHudVisible(false);
     this.setRunnerFallenDisplay(S(150), S(86));
@@ -1737,6 +1817,12 @@ class RunForGloryScene extends Phaser.Scene {
       return root;
     }
 
+    const runNumberById = new Map(
+      [...attempts]
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((attempt, index) => [attempt.id, index + 1])
+    );
+
     const header = document.createElement("div");
     header.style.display = "grid";
     header.style.gridTemplateColumns = "34px 1fr 110px 150px";
@@ -1759,7 +1845,7 @@ class RunForGloryScene extends Phaser.Scene {
       });
     };
 
-    attempts.forEach((attempt, index) => {
+    attempts.forEach((attempt) => {
       const row = document.createElement("label");
       row.style.display = "grid";
       row.style.gridTemplateColumns = "34px 1fr 110px 150px";
@@ -1786,7 +1872,7 @@ class RunForGloryScene extends Phaser.Scene {
       });
 
       const run = document.createElement("span");
-      run.textContent = `Run ${attempts.length - index}`;
+      run.textContent = `Run ${runNumberById.get(attempt.id) ?? "-"}`;
       const distance = document.createElement("span");
       distance.textContent = `${attempt.distance.toLocaleString()}M`;
       distance.style.textAlign = "right";
@@ -1863,7 +1949,7 @@ class RunForGloryScene extends Phaser.Scene {
 
     return this.loadRunAttempts()
       .filter((attempt) => this.submissionIdentityKey(attempt.name, attempt.company) === playerKey)
-      .sort((a, b) => b.createdAt - a.createdAt);
+      .sort((a, b) => b.distance - a.distance || b.createdAt - a.createdAt);
   }
 
   private loadRunAttempts(): RunAttemptEntry[] {
