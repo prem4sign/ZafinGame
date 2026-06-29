@@ -15,6 +15,7 @@ import trafficCone from "../assets/obstacles/traffic_cone.png";
 import barricade from "../assets/obstacles/barricade.png";
 import background from "../assets/environment/background.png";
 import completionShareImage from "../assets/ui/run_for_glory_completion.png";
+import launchScreen from "../assets/ui/launch_screen.png";
 import topEventBadge from "../assets/ui/top_event_badge.png";
 
 const BASE_GAME_WIDTH = 960;
@@ -70,6 +71,12 @@ const MAX_LOCAL_LEADERBOARD_ENTRIES = 20;
 const MAX_LOCAL_RUN_ATTEMPTS = 100;
 const ADMIN_NAME = "admin";
 const ADMIN_COMPANY = "admin020";
+const LAUNCH_SCREEN_SOURCE_WIDTH = 1672;
+const LAUNCH_SCREEN_SOURCE_HEIGHT = 941;
+const LAUNCH_SCREEN_SCALE = Math.max(
+  GAME_WIDTH / LAUNCH_SCREEN_SOURCE_WIDTH,
+  GAME_HEIGHT / LAUNCH_SCREEN_SOURCE_HEIGHT
+);
 const RUN_FRAME_KEYS = [
   "runner_smooth_run_1",
   "runner_smooth_run_2",
@@ -96,6 +103,7 @@ const assetMap = {
   traffic_cone: trafficCone,
   barricade,
   background,
+  launch_screen: launchScreen,
   top_event_badge: topEventBadge
 };
 
@@ -203,6 +211,7 @@ class RunForGloryScene extends Phaser.Scene {
   private hudStaticLabels: Phaser.GameObjects.Text[] = [];
   private controlsContainer?: Phaser.GameObjects.Container;
   private virtualControlButtons: Phaser.GameObjects.Container[] = [];
+  private launchOverlay?: Phaser.GameObjects.Container;
   private startOverlay?: Phaser.GameObjects.Container;
   private gameOverOverlay?: Phaser.GameObjects.Container;
   private submitDistanceOverlay?: Phaser.GameObjects.Container;
@@ -217,6 +226,7 @@ class RunForGloryScene extends Phaser.Scene {
   private pendingPlayerName = "";
   private pendingCompanyName = "";
   private pendingAutoStart = false;
+  private pendingShowHowToPlay = false;
   private distanceSubmitted = false;
   private runAttemptRecorded = false;
   private selectedAttemptId = "";
@@ -244,10 +254,11 @@ class RunForGloryScene extends Phaser.Scene {
     super("RunForGloryScene");
   }
 
-  init(data?: { playerName?: string; companyName?: string; autoStart?: boolean }) {
+  init(data?: { playerName?: string; companyName?: string; autoStart?: boolean; showHowToPlay?: boolean }) {
     this.pendingPlayerName = data?.playerName?.trim() ?? "";
     this.pendingCompanyName = data?.companyName?.trim() ?? "";
     this.pendingAutoStart = Boolean(data?.autoStart && this.pendingPlayerName);
+    this.pendingShowHowToPlay = Boolean(data?.showHowToPlay);
   }
 
   preload() {
@@ -275,7 +286,11 @@ class RunForGloryScene extends Phaser.Scene {
       return;
     }
 
-    this.createStartOverlay();
+    if (this.pendingShowHowToPlay) {
+      this.createStartOverlay();
+    } else {
+      this.createLaunchOverlay();
+    }
     this.physics.pause();
   }
 
@@ -299,6 +314,7 @@ class RunForGloryScene extends Phaser.Scene {
     this.virtualLeftDown = false;
     this.virtualRightDown = false;
     this.startOverlay = undefined;
+    this.launchOverlay = undefined;
     this.gameOverOverlay = undefined;
     this.submitDistanceOverlay = undefined;
     this.myScoresOverlay = undefined;
@@ -908,12 +924,46 @@ class RunForGloryScene extends Phaser.Scene {
     });
   }
 
+  private createLaunchOverlay() {
+    const launchImage = this.add
+      .image(GAME_WIDTH / 2, GAME_HEIGHT / 2, "launch_screen")
+      .setDisplaySize(
+        LAUNCH_SCREEN_SOURCE_WIDTH * LAUNCH_SCREEN_SCALE,
+        LAUNCH_SCREEN_SOURCE_HEIGHT * LAUNCH_SCREEN_SCALE
+      );
+    const buttonX = GAME_WIDTH / 2 + S(6);
+    const buttonY = GAME_HEIGHT * 0.66;
+    const buttonWidth = S(330);
+    const buttonHeight = S(88);
+    const playButton = this.add
+      .rectangle(buttonX, buttonY, buttonWidth, buttonHeight, 0xffffff, 0)
+      .setInteractive({ useHandCursor: true });
+
+    playButton.on("pointerdown", () => this.openHowToPlayFromLaunch());
+
+    this.launchOverlay = this.add
+      .container(0, 0, [launchImage, playButton])
+      .setDepth(2600);
+  }
+
+  private openHowToPlayFromLaunch() {
+    this.launchOverlay?.destroy();
+    this.launchOverlay = undefined;
+    this.createStartOverlay();
+    this.physics.pause();
+  }
+
   private handleKeyboard() {
     const jumpPressed =
       Phaser.Input.Keyboard.JustDown(this.spaceKey) || Phaser.Input.Keyboard.JustDown(this.upKey);
     const enterPressed = Phaser.Input.Keyboard.JustDown(this.enterKey);
 
     if (this.isGameOver) {
+      return;
+    }
+
+    if (this.launchOverlay && (jumpPressed || enterPressed)) {
+      this.openHowToPlayFromLaunch();
       return;
     }
 
@@ -1567,7 +1617,8 @@ class RunForGloryScene extends Phaser.Scene {
     this.scene.restart({
       playerName: "",
       companyName: "",
-      autoStart: false
+      autoStart: false,
+      showHowToPlay: true
     });
   }
 
